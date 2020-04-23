@@ -1,3 +1,4 @@
+//! Spec: https://www.ecma-international.org/publications/files/ECMA-ST/ECMA-335.pdf
 use std::io;
 use std::mem::size_of;
 const DOS_HEADER: &[u8; 0x84] = include_bytes!("./dos_header");
@@ -69,7 +70,20 @@ impl Winmd {
         };
 
         result.extend(&cli_header.to_bytes()[..]);
-        result.extend(&[0; 56][..]);
+        result.extend(&[0x6, 0x2A, 0, 0]); // What is this?
+        let root = MetadataRoot {
+            version: String::from("WindowsRuntime 1.2"),
+            streams: vec![
+                StreamHeader::new(0x74, 0x4C, String::from("#~")),
+                StreamHeader::new(0xC0, 0x20, String::from("#Strings")),
+                StreamHeader::new(0xE0, 0x08, String::from("#US")),
+                StreamHeader::new(0xE8, 0x10, String::from("#GUID")),
+                StreamHeader::new(0xF8, 0x08, String::from("#Blob")),
+            ],
+        };
+        result.extend(&root.to_bytes());
+        let tilde_stream = TildeStream::new(0, 0b1000101, 0x16003325FA00);
+        result.extend(&tilde_stream.to_bytes());
 
         result
     }
@@ -317,6 +331,94 @@ impl CLIHeader {
     }
 }
 
+struct MetadataRoot {
+    version: String,
+    // TODO: can this be hard coded to an array of length 5?
+    streams: Vec<StreamHeader>,
+}
+
+impl MetadataRoot {
+    fn to_bytes(&self) -> Vec<u8> {
+        let version_len = self.version.as_bytes().len() + 1;
+        let version_capacity_adjustment = if version_len % 4 != 0 {
+            4 - version_len % 4
+        } else {
+            0
+        };
+        debug_assert!((version_len + version_capacity_adjustment) % 4 == 0);
+        let streams_capacity = self.streams.len() * 40;
+        let mut result =
+            Vec::with_capacity(20 + version_len + version_capacity_adjustment + streams_capacity);
+        result.extend(&[
+            0x42, 0x53, 0x4A, 0x42, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
+        result.extend(&((version_len + version_capacity_adjustment) as u32).to_le_bytes());
+        result.extend(self.version.as_bytes());
+        result.push(0x00);
+        result.extend(std::iter::repeat(0).take(version_capacity_adjustment));
+        result.extend(&[0, 0]);
+
+        result.extend(&(self.streams.len() as u16).to_le_bytes());
+        for s in self.streams.iter() {
+            result.extend(&s.offset.to_le_bytes());
+            result.extend(&s.size.to_le_bytes());
+            result.extend(&s.name);
+        }
+
+        result
+    }
+}
+
+struct StreamHeader {
+    offset: u32,
+    size: u32,
+    name: Vec<u8>,
+}
+
+impl StreamHeader {
+    fn new(offset: u32, size: u32, name: String) -> StreamHeader {
+        assert!(name.is_ascii(), "Stream name must be ascii");
+        let mut name = name.into_bytes();
+        name.push(0x0);
+        while name.len() % 4 != 0 {
+            name.push(0x0);
+        }
+        StreamHeader { offset, size, name }
+    }
+}
+
+struct TildeStream {
+    // Bit vector for heap sizes.
+    heap_sizes: u8,
+    // Bit vector of present tables
+    valid: u64,
+    sorted: u64,
+}
+
+// II.24.2.6 #~stream
+impl TildeStream {
+    fn new(heap_sizes: u8, valid: u64, sorted: u64) -> Self {
+        Self {
+            heap_sizes,
+            valid,
+            sorted,
+        }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+        result.extend(&0u32.to_le_bytes());
+        result.push(0x2); // major version
+        result.push(0x0); // major version
+        result.push(self.heap_sizes);
+        result.push(0x1);
+        result.extend(&self.valid.to_le_bytes());
+        result.extend(&self.sorted.to_le_bytes());
+        result.extend(&[0; 32]);
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,12 +433,18 @@ mod tests {
             + (std::mem::size_of::<ImageSectionHeader>() * 2)
             + 56
             + std::mem::size_of::<ImportAddressTable>()
-            + size_of::<CLIHeader>();
+            + size_of::<CLIHeader>()
+            + 88
+            + 32;
 
-        let end = start + 4;
+        let end = start + 24;
 
         println!("0x{:x} to 0x{:x}", start, end);
         println!("Bytes left: {}", expected[end..].len());
-        assert_eq!(&bytes[start..end], &expected[start..end]);
+        let actual = &bytes[start..end];
+        let expected = &expected[start..end];
+        println!("{:x?}", actual);
+        println!("{:x?}", expected);
+        assert_eq!(actual, expected);
     }
 }
