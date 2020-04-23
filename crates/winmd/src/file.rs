@@ -108,6 +108,8 @@ impl WinmdFile {
             _ => panic!("Invalid file: invalid magic"),
         };
 
+        // section header is COM section header/
+        // com virtual address is 0x2008
         let cli = file.bytes.view_as::<ImageCorHeader>(offset_from_rva(
             section_from_rva(sections, com_virtual_address),
             com_virtual_address,

@@ -1,104 +1,76 @@
 use std::io;
-
+use std::mem::size_of;
+const DOS_HEADER: &[u8; 0x84] = include_bytes!("./dos_header");
 pub struct Winmd {}
 
 impl Winmd {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut result = vec![];
-        result.extend(&DOS_HEADER);
-        result.extend(&DOS_HEADER_SUFFIX);
-        result.extend(&E_LFANEW);
-        result.extend(&STUB_PROGRAM_PREFIX);
-        result.extend(DOS_MESSAGE);
-        result.extend(&DOS_MESSAGE_SUFFIX);
-        result.extend(&STUB_PROGRAM_SUFFIX);
-        result.extend(&PE_HEADER);
+        let mut result = Vec::with_capacity(
+            DOS_HEADER.len() + size_of::<COFFHeader>() + size_of::<PEOptHeader>(),
+        );
+        result.extend(&DOS_HEADER[..]);
 
-        let coff = COFFHeader::new(2, 0x5E9_DCF09);
-        result.extend(&coff.to_bytes());
-        let mut data_directory: [DataDirectory; 16] = Default::default();
-        // imports
-        data_directory[1] = DataDirectory {
-            virtual_address: 0x0000_2154,
-            size: 0x0000_0057,
-        };
-        // base relocation
-        data_directory[5] = DataDirectory {
-            virtual_address: 0x0000_4000,
-            size: 0x0000_000C,
-        };
-        // import address
-        data_directory[12] = DataDirectory {
-            virtual_address: 0x0000_2000,
-            size: 0x0000_0008,
-        };
-        // COM descriptor
-        data_directory[14] = DataDirectory {
-            virtual_address: 0x0000_2008,
-            size: 0x0000_0048,
-        };
-        let header = PEOptHeader {
-            // IMAGE_NT_OPTIONAL_HDR32_MAGIC
-            signature: 0x010B,
-            linker_version: 0x000B,
-            size_code: 0x0000_0200,
-            size_initialized_data: 0x0000_0200,
+        // TODO: do not hard code num_sections or time_date_stamp
+        let coff_header = COFFHeader::new(2, 0x5E9_DCF09);
+        result.extend(&coff_header.to_bytes());
 
-            entry_point: 0x0000_21AE,
-            base_code: 0x0000_2000,
-            base_data: 0x0000_4000,
-            image_base: 0x0040_0000,
-            section_alignment: 0x0000_2000,
-            file_alignment: 0x0000_0200,
-            os_version: 0x0000_0004,
-            subsystem_version: 0x0000_0004,
-            size_image: 0x0000_6000,
-            size_headers: 0x0000_0200,
-            subsystem: 0x0003,
-            dll_characteristics: 0x8540,
-            size_stack_reserve: 0x0010_0000,
-            size_stack_commit: 0x0000_1000,
-            size_heap_reserve: 0x0010_0000,
-            size_heap_commit: 0x0000_1000,
-            number_rva_sizes: 0x0000_0010,
+        let opt_header = PEOptHeader::new(
+            0x0000_0200,
+            0x0000_0200,
+            0x0000_21AE,
+            0x0000_2000,
+            0x0000_4000,
+            0x0040_0000,
+            0x0000_6000,
+            0x0000_0200,
+        );
 
-            data_directory,
-            ..Default::default()
-        };
-        result.extend(&header.to_bytes()[..]);
-        let header = ImageSectionHeader {
-            name: *b".text\0\0\0",
-            physical_address_or_virtual_size: 0x0000_01B4,
-            virtual_address: 0x0000_2000,
-            size_raw_data: 0x0000_0200,
-            pointer_raw_data: 0x0000_0200,
+        result.extend(&opt_header.to_bytes()[..]);
+        let header = ImageSectionHeader::new(
+            *b".text\0\0\0",
+            0x0000_01B4,
+            0x0000_2000,
+            0x0000_0200,
+            0x0000_0200,
             // IMAGE_SCN_CNT_CODE
             // IMAGE_SCN_MEM_WRITE
             // IMAGE_SCN_MEM_READ
-            characteristics: 0b1100000_00000000_00000000_00100000,
-            ..Default::default()
-        };
+            0b1100000_00000000_00000000_00100000,
+        );
         result.extend(&header.to_bytes()[..]);
-        let header = ImageSectionHeader {
-            name: *b".reloc\0\0",
-            physical_address_or_virtual_size: 0x0000_000C,
-            virtual_address: 0x0000_4000,
-            size_raw_data: 0x0000_0200,
-            pointer_raw_data: 0x0000_0400,
+        let header = ImageSectionHeader::new(
+            *b".reloc\0\0",
+            0x0000_000C,
+            0x0000_4000,
+            0x0000_0200,
+            0x0000_0400,
             // IMAGE_SCN_CNT_INITIALIZED_DATA
             // IMAGE_SCN_MEM_READ
             // IMAGE_SCN_MEM_DISCARDABLE
-            characteristics: 0b01000010_00000000_00000000_01000000,
-            ..Default::default()
-        };
+            0b01000010_00000000_00000000_01000000,
+        );
         result.extend(&header.to_bytes()[..]);
-        // 40 import table
+        // padding
         result.extend(&[0; 56][..]);
+        let import_address_table = ImportAddressTable::new(0x0000_2190);
+        result.extend(&import_address_table.to_bytes());
         let cli_header = CLIHeader {
             cb: std::mem::size_of::<CLIHeader>() as u32,
+            runtime_version: 0x0005_0002,
+            metadata: DataDirectory {
+                // CLI Data located at file offset x254
+                // This is the 0x2054 (the virtual_address below) - 0x2000 (the RVA of the .text section) +
+                // 0x200 (the pointer to raw data of the .text section)
+                virtual_address: 0x00002054,
+                size: 0x00000100,
+            },
+            flags: 0b00000000_00000000_00000000_00000001,
             ..Default::default()
         };
+
         result.extend(&cli_header.to_bytes()[..]);
+        result.extend(&[0; 56][..]);
+
         result
     }
 }
@@ -150,33 +122,6 @@ impl COFFHeader {
     }
 }
 
-// const fn u16_as_le(n: u16) -> [u8; 2] {
-//     [(n & 0xFF) as u8, ((n & 0xFF00) >> 8) as u8]
-// }
-const fn u32_as_le(n: u32) -> [u8; 4] {
-    [
-        (n & 0xFF) as u8,
-        ((n & 0xFF00) >> 8) as u8,
-        ((n & 0xFF_0000) >> 16) as u8,
-        ((n & 0xFF00_0000) >> 24) as u8,
-    ]
-}
-
-const DOS_HEADER: [u8; 28] = [
-    b'M', b'Z', 0x90, 0x00, 0x03, 0x0, 0x0, 0x0, 0x4, 0x0, 0x0, 0x0, 0xFF, 0xFF, 0x0, 0x0, 0xB8,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x40, 0x0, 0x0, 0x0,
-];
-const DOS_HEADER_SUFFIX: [u8; 32] = [0x0; 32];
-const E_LFANEW: [u8; 4] = u32_as_le(0x80);
-
-const STUB_PROGRAM_PREFIX: [u8; 14] = [
-    0x0E, 0x1F, 0xBA, 0x0E, 0x00, 0xB4, 0x09, 0xCD, 0x21, 0xB8, 0x01, 0x4C, 0xCD, 0x21,
-];
-const DOS_MESSAGE: &[u8] = b"This program cannot be run in DOS mode";
-const DOS_MESSAGE_SUFFIX: [u8; 5] = [0x2E, 0x0D, 0x0D, 0x0A, b'$'];
-const STUB_PROGRAM_SUFFIX: [u8; 7] = [0x0; 7];
-const PE_HEADER: [u8; 4] = [b'P', b'E', 0, 0];
-
 #[derive(Default)]
 #[repr(C)]
 struct PEOptHeader {
@@ -212,6 +157,67 @@ struct PEOptHeader {
 }
 
 impl PEOptHeader {
+    fn new(
+        size_code: u32,
+        size_initialized_data: u32,
+        entry_point: u32,
+        base_code: u32,
+        base_data: u32,
+        image_base: u32,
+        size_image: u32,
+        size_headers: u32,
+    ) -> Self {
+        let mut data_directory: [DataDirectory; 16] = Default::default();
+        // imports
+        data_directory[1] = DataDirectory {
+            virtual_address: 0x0000_2154,
+            size: 0x0000_0057,
+        };
+        // base relocation
+        data_directory[5] = DataDirectory {
+            virtual_address: 0x0000_4000,
+            size: 0x0000_000C,
+        };
+        // import address
+        data_directory[12] = DataDirectory {
+            virtual_address: 0x0000_2000,
+            size: 0x0000_0008,
+        };
+        // COM descriptor
+        data_directory[14] = DataDirectory {
+            virtual_address: 0x0000_2008,
+            size: 0x0000_0048,
+        };
+
+        PEOptHeader {
+            // Always IMAGE_NT_OPTIONAL_HDR32_MAGIC
+            signature: 0x010B,
+            linker_version: 0x000B,
+            size_code,
+            size_initialized_data,
+            // TODO allow uninitialized data
+            entry_point,
+            base_code,
+            base_data,
+            image_base,
+            section_alignment: 0x0000_2000,
+            file_alignment: 0x0000_0200,
+            os_version: 0x0000_0004,
+            subsystem_version: 0x0000_0004,
+            size_image,
+            size_headers,
+            subsystem: 0x0003,
+            dll_characteristics: 0x8540,
+            size_stack_reserve: 0x0010_0000,
+            size_stack_commit: 0x0000_1000,
+            size_heap_reserve: 0x0010_0000,
+            size_heap_commit: 0x0000_1000,
+            number_rva_sizes: 0x0000_0010,
+
+            data_directory,
+            ..Default::default()
+        }
+    }
     fn to_bytes(&self) -> [u8; std::mem::size_of::<Self>()] {
         // This is safe because `Self` is `#[repr(C)]` and only contains
         // primitive types
@@ -230,7 +236,7 @@ struct DataDirectory {
 #[repr(C)]
 struct ImageSectionHeader {
     name: [u8; 8],
-    physical_address_or_virtual_size: u32,
+    virtual_size: u32,
     virtual_address: u32,
     size_raw_data: u32,
     pointer_raw_data: u32,
@@ -241,6 +247,46 @@ struct ImageSectionHeader {
     characteristics: u32,
 }
 impl ImageSectionHeader {
+    fn new(
+        name: [u8; 8],
+        virtual_size: u32,
+        virtual_address: u32,
+        size_raw_data: u32,
+        pointer_raw_data: u32,
+        characteristics: u32,
+    ) -> Self {
+        Self {
+            name,
+            virtual_size,
+            virtual_address,
+            size_raw_data,
+            pointer_raw_data,
+            characteristics,
+            ..Default::default()
+        }
+    }
+    fn to_bytes(&self) -> [u8; std::mem::size_of::<Self>()] {
+        // This is safe because `Self` is `#[repr(C)]` and only contains
+        // primitive types
+        unsafe { std::mem::transmute_copy(self) }
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct ImportAddressTable {
+    hint_name_table_rva: u32,
+    zeroed: u32,
+}
+
+impl ImportAddressTable {
+    fn new(hint_name_table_rva: u32) -> Self {
+        Self {
+            hint_name_table_rva,
+            zeroed: 0,
+        }
+    }
+
     fn to_bytes(&self) -> [u8; std::mem::size_of::<Self>()] {
         // This is safe because `Self` is `#[repr(C)]` and only contains
         // primitive types
@@ -253,7 +299,7 @@ impl ImageSectionHeader {
 struct CLIHeader {
     cb: u32,
     runtime_version: u32,
-    metadata: u64,
+    metadata: DataDirectory,
     flags: u32,
     entry_point_taken: u32,
     resources: u64,
@@ -277,30 +323,20 @@ mod tests {
     #[test]
     fn creates_bytes() {
         let winmd = Winmd {};
-        let expected = std::fs::read("sample.winmd").unwrap();
+        let expected = std::fs::read("./examples/example.winmd").unwrap();
         let bytes = winmd.to_bytes();
         let start = DOS_HEADER.len()
-            + DOS_HEADER_SUFFIX.len()
-            + E_LFANEW.len()
-            + STUB_PROGRAM_PREFIX.len()
-            + DOS_MESSAGE.len()
-            + DOS_MESSAGE_SUFFIX.len()
-            + STUB_PROGRAM_SUFFIX.len()
-            + PE_HEADER.len()
             + std::mem::size_of::<COFFHeader>()
             + std::mem::size_of::<PEOptHeader>()
             + (std::mem::size_of::<ImageSectionHeader>() * 2)
-            + 56;
+            + 56
+            + std::mem::size_of::<ImportAddressTable>()
+            + size_of::<CLIHeader>();
 
-        let end = start + std::mem::size_of::<CLIHeader>();
+        let end = start + 4;
 
         println!("0x{:x} to 0x{:x}", start, end);
         println!("Bytes left: {}", expected[end..].len());
-        assert_eq!(&bytes[..start], &expected[..start]);
-    }
-
-    #[test]
-    fn little_endian() {
-        assert_eq!(u32_as_le(0xAB10DC20), [0x20, 0xDC, 0x10, 0xAB]);
+        assert_eq!(&bytes[start..end], &expected[start..end]);
     }
 }
