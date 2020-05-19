@@ -39,12 +39,12 @@ impl Struct {
     }
 
     pub fn to_tokens(&self) -> TokenStream {
-        let name = &*self.name.to_tokens(&self.name.namespace);
+        let name = self.name.to_tokens();
         let signature = &self.signature;
 
         let fields = self.fields.iter().map(|field| {
             let name = format_ident(&field.0);
-            let kind = field.1.to_tokens(&self.name.namespace);
+            let kind = field.1.to_tokens();
             quote! {
                 pub #name: #kind
             }

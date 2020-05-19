@@ -28,9 +28,10 @@ impl Class {
         let signature = if !interfaces.is_empty() && interfaces[0].kind == InterfaceKind::Default {
             name.class_signature(reader)
         } else {
-            "".to_owned()
+            String::new()
         };
 
+        let top_level_namespace = &name.namespace;
         loop {
             let (namespace, name) = base.extends(reader).name(reader);
 
@@ -39,11 +40,15 @@ impl Class {
             }
 
             base = reader.resolve_type_def((namespace, name));
-            let namespace = namespace.to_string();
-            let name = name.to_string();
             let generics = Vec::new();
 
-            let base = TypeName::new(namespace, name, generics, base);
+            let base = TypeName::new(
+                namespace.to_owned(),
+                name.to_owned(),
+                generics,
+                base,
+                top_level_namespace.clone(),
+            );
 
             RequiredInterface::append_required(reader, &base, &mut interfaces);
             bases.push(base);
@@ -93,14 +98,16 @@ impl Class {
     }
 
     pub fn to_tokens(&self) -> TokenStream {
-        let name = &*self.name.to_tokens(&self.name.namespace);
+        let name = self.name.to_tokens();
         let type_name = self.type_name(&name);
-        let methods = to_method_tokens(&self.name.namespace, &self.interfaces);
+        let methods = to_method_tokens(&self.interfaces);
 
         if self.interfaces[0].kind == InterfaceKind::Default {
-            let conversions = TokenStream::from_iter(self.interfaces.iter().map(|interface| {
-                interface.to_conversions_tokens(&self.name.namespace, &name, &TokenStream::new())
-            }));
+            let conversions = TokenStream::from_iter(
+                self.interfaces
+                    .iter()
+                    .map(|interface| interface.to_conversions_tokens(&name, &TokenStream::new())),
+            );
 
             let new = if self.default_constructor {
                 quote! {
@@ -113,12 +120,12 @@ impl Class {
             };
 
             let object = to_object_tokens(&name, &TokenStream::new());
-            let bases = self.to_base_conversions_tokens(&self.name.namespace, &name);
+            let bases = self.to_base_conversions_tokens(&name);
             let iterator = iterator_tokens(&self.name, &self.interfaces);
             let signature = &self.signature;
 
-            let default_name = &*self.interfaces[0].name.to_tokens(&self.name.namespace);
-            let abi_name = self.interfaces[0].name.to_abi_tokens(&self.name.namespace);
+            let default_name = self.interfaces[0].name.to_tokens();
+            let abi_name = self.interfaces[0].name.to_abi_tokens();
             let async_get = async_get_tokens(&self.name, &self.interfaces);
             let debug = debug::debug_tokens(&self.name, &self.interfaces);
 
@@ -165,13 +172,9 @@ impl Class {
         }
     }
 
-    pub fn to_base_conversions_tokens(
-        &self,
-        calling_namespace: &str,
-        from: &TokenStream,
-    ) -> TokenStream {
+    pub fn to_base_conversions_tokens(&self, from: &TokenStream) -> TokenStream {
         TokenStream::from_iter(self.bases.iter().map(|base| {
-            let into = &*base.to_tokens(calling_namespace);
+            let into = base.to_tokens();
             quote! {
                 impl ::std::convert::From<#from> for #into {
                     fn from(value: #from) -> #into {

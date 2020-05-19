@@ -175,7 +175,7 @@ impl TypeKind {
         }
     }
 
-    pub fn to_tokens(&self, calling_namespace: &str) -> TokenStream {
+    pub fn to_tokens(&self) -> TokenStream {
         match self {
             Self::Bool => quote! { bool },
             Self::Char => quote! { u16 },
@@ -192,11 +192,11 @@ impl TypeKind {
             Self::String => quote! { ::winrt::HString },
             Self::Object => quote! { ::winrt::Object },
             Self::Guid => quote! { ::winrt::Guid },
-            Self::Class(name) => name.to_tokens(calling_namespace).clone(),
-            Self::Interface(name) => name.to_tokens(calling_namespace).clone(),
-            Self::Enum(name) => name.to_tokens(calling_namespace).clone(),
-            Self::Struct(name) => name.to_tokens(calling_namespace).clone(),
-            Self::Delegate(name) => name.to_tokens(calling_namespace).clone(),
+            Self::Class(name) => name.to_tokens().clone(),
+            Self::Interface(name) => name.to_tokens().clone(),
+            Self::Enum(name) => name.to_tokens().clone(),
+            Self::Struct(name) => name.to_tokens().clone(),
+            Self::Delegate(name) => name.to_tokens().clone(),
             Self::Generic(name) => {
                 let name = format_ident(name);
                 quote! { #name }
@@ -204,7 +204,7 @@ impl TypeKind {
         }
     }
 
-    pub fn to_abi_tokens(&self, calling_namespace: &str) -> TokenStream {
+    pub fn to_abi_tokens(&self) -> TokenStream {
         match self {
             Self::Bool => quote! { bool, },
             Self::Char => quote! { u16, },
@@ -234,7 +234,7 @@ impl TypeKind {
             | Self::Delegate(name)
             | Self::Enum(name)
             | Self::Struct(name) => {
-                let name = &*name.to_tokens(calling_namespace);
+                let name = name.to_tokens();
                 quote! { <#name as ::winrt::RuntimeType>::Abi, }
             }
         }

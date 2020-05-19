@@ -110,23 +110,22 @@ impl RequiredInterface {
         }
     }
 
-    pub fn to_abi_method_tokens(&self, calling_namespace: &str) -> TokenStream {
+    pub fn to_abi_method_tokens(&self) -> TokenStream {
         TokenStream::from_iter(
             self.methods
                 .iter()
-                .map(|method| method.to_abi_tokens(&self.name, calling_namespace)),
+                .map(|method| method.to_abi_tokens(&self.name)),
         )
     }
 
     pub fn to_conversions_tokens(
         &self,
-        calling_namespace: &str,
         from: &TokenStream,
         constraints: &TokenStream,
     ) -> TokenStream {
         match self.kind {
             InterfaceKind::Default => {
-                let into = &*self.name.to_tokens(calling_namespace);
+                let into = self.name.to_tokens();
                 quote! {
                     impl<#constraints> ::std::convert::From<#from> for #into {
                         fn from(value: #from) -> #into {
@@ -151,7 +150,7 @@ impl RequiredInterface {
                 }
             }
             InterfaceKind::NonDefault => {
-                let into = &*self.name.to_tokens(calling_namespace);
+                let into = self.name.to_tokens();
                 quote! {
                     impl<#constraints> ::std::convert::From<#from> for #into {
                         fn from(value: #from) -> #into {
@@ -180,10 +179,7 @@ impl RequiredInterface {
     }
 }
 
-pub fn to_method_tokens(
-    calling_namespace: &str,
-    interfaces: &Vec<RequiredInterface>,
-) -> TokenStream {
+pub fn to_method_tokens(interfaces: &Vec<RequiredInterface>) -> TokenStream {
     let mut tokens = Vec::new();
     let mut names = BTreeSet::new();
 
@@ -197,11 +193,11 @@ pub fn to_method_tokens(
             names.insert(&method.name);
 
             tokens.push(match interface.kind {
-                InterfaceKind::Default => method.to_default_tokens(calling_namespace),
+                InterfaceKind::Default => method.to_default_tokens(),
                 InterfaceKind::NonDefault | InterfaceKind::Overrides => {
-                    method.to_non_default_tokens(calling_namespace, interface)
+                    method.to_non_default_tokens(interface)
                 }
-                InterfaceKind::Statics => method.to_static_tokens(calling_namespace, interface),
+                InterfaceKind::Statics => method.to_static_tokens(interface),
             });
         }
     }

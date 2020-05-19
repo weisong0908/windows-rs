@@ -37,22 +37,20 @@ impl Delegate {
     }
 
     pub fn to_tokens(&self) -> TokenStream {
-        let definition = self.name.to_definition_tokens(&self.name.namespace);
-        let abi_definition = self.name.to_abi_definition_tokens(&self.name.namespace);
+        let definition = self.name.to_definition_tokens();
+        let abi_definition = self.name.to_abi_definition_tokens();
         let fn_constraint = self.to_fn_constraint_tokens();
         let impl_definition = self.to_impl_definition_tokens(&fn_constraint);
-        let name = &*self.name.to_tokens(&self.name.namespace);
-        let abi_name = self.name.to_abi_tokens(&self.name.namespace);
+        let name = self.name.to_tokens();
+        let abi_name = self.name.to_abi_tokens();
         let impl_name = self.to_impl_name_tokens();
         let phantoms = self.name.phantoms();
         let constraints = &*self.name.constraints();
-        let method = self.method.to_default_tokens(&self.name.namespace);
-        let abi_method = self.method.to_abi_tokens(&self.name, &self.name.namespace);
+        let method = self.method.to_default_tokens();
+        let abi_method = self.method.to_abi_tokens(&self.name);
         let guid = self.name.to_guid_tokens(&self.guid);
         let signature = self.name.to_signature_tokens(&self.signature);
-        let invoke_sig = self
-            .method
-            .to_abi_impl_tokens(&self.name, &self.name.namespace);
+        let invoke_sig = self.method.to_abi_impl_tokens(&self.name);
         let invoke_args = self
             .method
             .params
@@ -196,14 +194,10 @@ impl Delegate {
     }
 
     fn to_fn_constraint_tokens(&self) -> TokenStream {
-        let params = self
-            .method
-            .params
-            .iter()
-            .map(|param| param.to_fn_tokens(&self.name.namespace));
+        let params = self.method.params.iter().map(|param| param.to_fn_tokens());
 
         let return_type = if let Some(return_type) = &self.method.return_type {
-            return_type.to_return_tokens(&self.name.namespace)
+            return_type.to_return_tokens()
         } else {
             quote! { () }
         };
@@ -217,11 +211,7 @@ impl Delegate {
             quote! { #name<#fn_constraint> }
         } else {
             let name = format_impl_ident(&self.name.name[..self.name.name.len() - 2]);
-            let generics = self
-                .name
-                .generics
-                .iter()
-                .map(|g| g.to_tokens(&self.name.namespace));
+            let generics = self.name.generics.iter().map(|g| g.to_tokens());
             quote! { #name<#(#generics,)* #fn_constraint> }
         }
     }
@@ -232,11 +222,7 @@ impl Delegate {
             quote! { #name::<F> }
         } else {
             let name = format_impl_ident(&self.name.name[..self.name.name.len() - 2]);
-            let generics = self
-                .name
-                .generics
-                .iter()
-                .map(|g| g.to_tokens(&self.name.namespace));
+            let generics = self.name.generics.iter().map(|g| g.to_tokens());
             quote! { #name::<#(#generics,)* F> }
         }
     }

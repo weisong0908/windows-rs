@@ -7,8 +7,6 @@ use crate::*;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use std::cell::{Ref, RefCell};
-use std::collections::HashMap;
 use std::iter::FromIterator;
 
 #[derive(Debug, Clone)]
@@ -17,8 +15,9 @@ pub struct TypeName {
     pub name: String,
     pub generics: Vec<TypeKind>,
     pub def: TypeDef,
-    constraints: RefCell<Option<TokenStream>>,
-    tokens: RefCell<HashMap<String, TokenStream>>,
+    constraints: TokenStream,
+    tokens: TokenStream,
+    calling_namespace: String,
 }
 
 impl PartialEq for TypeName {
@@ -50,14 +49,35 @@ impl Ord for TypeName {
 }
 
 impl TypeName {
-    pub fn new(namespace: String, name: String, generics: Vec<TypeKind>, def: TypeDef) -> Self {
+    pub fn new(
+        namespace: String,
+        name: String,
+        generics: Vec<TypeKind>,
+        def: TypeDef,
+        calling_namespace: String,
+    ) -> Self {
+        let namespace_tokens = to_namespace_tokens(&namespace, &calling_namespace);
+
+        let tokens = if generics.is_empty() {
+            let name = format_ident(&name);
+            quote! { #namespace_tokens#name }
+        } else {
+            let name = format_ident(&name[..name.len() - 2]);
+            let generics = generics.iter().map(|g| g.to_tokens());
+            quote! { #namespace_tokens#name::<#(#generics),*> }
+        };
+        let constraints = TokenStream::from_iter(generics.iter().map(|generic| {
+            let generic = generic.to_tokens();
+            quote! { #generic: ::winrt::RuntimeType + 'static, }
+        }));
         Self {
             namespace,
             name,
             generics,
             def,
-            constraints: RefCell::new(None),
-            tokens: RefCell::new(HashMap::new()),
+            constraints,
+            tokens,
+            calling_namespace,
         }
     }
     pub fn to_signature_tokens(&self, signature: &str) -> TokenStream {
@@ -69,12 +89,12 @@ impl TypeName {
         // most two generic parameters.
         let format = match self.generics.len() {
             1 => {
-                let first = self.generics[0].to_tokens("");
+                let first = self.generics[0].to_tokens();
                 quote! { format!("pinterface({};{})", #signature, <#first as ::winrt::RuntimeType>::signature()) }
             }
             2 => {
-                let first = self.generics[0].to_tokens("");
-                let second = self.generics[1].to_tokens("");
+                let first = self.generics[0].to_tokens();
+                let second = self.generics[1].to_tokens();
                 quote! { format!("pinterface({};{};{})", #signature, <#first as ::winrt::RuntimeType>::signature(), <#second as ::winrt::RuntimeType>::signature()) }
             }
             _ => panic!(),
@@ -250,14 +270,13 @@ impl TypeName {
         let (namespace, name) = def.name(reader);
         let namespace = namespace.to_string();
         let name = name.to_string();
-        let mut generics = Vec::new();
 
-        for generic in def.generics(reader) {
-            let name = generic.name(reader).to_string();
-            generics.push(TypeKind::Generic(name));
-        }
+        let generics = def
+            .generics(reader)
+            .map(|generic| TypeKind::Generic(generic.name(reader).to_string()))
+            .collect();
 
-        Self::new(namespace, name, generics, def)
+        Self::new(namespace.clone(), name, generics, def, String::new())
     }
 
     pub fn from_type_spec_blob(blob: &mut Blob, generics: &Vec<TypeKind>) -> Self {
@@ -273,7 +292,7 @@ impl TypeName {
         let name = name.to_string();
         let generics = args;
 
-        Self::new(namespace, name, generics, def)
+        Self::new(namespace.clone(), name, generics, def, String::new())
     }
 
     pub fn from_type_spec(reader: &TypeReader, spec: TypeSpec, generics: &Vec<TypeKind>) -> Self {
@@ -310,37 +329,19 @@ impl TypeName {
             .collect()
     }
 
-    pub fn to_tokens<'a>(&'a self, calling_namespace: &str) -> Ref<'a, TokenStream> {
-        let cache = self.tokens.borrow();
-        if let Some(_) = cache.get(calling_namespace) {
-            return Ref::map(cache, |s| s.get(calling_namespace).unwrap());
-        }
-        drop(cache);
-        let namespace = to_namespace_tokens(&self.namespace, calling_namespace);
-
-        let result = if self.generics.is_empty() {
-            let name = format_ident(&self.name);
-            quote! { #namespace#name }
-        } else {
-            let name = format_ident(&self.name[..self.name.len() - 2]);
-            let generics = self.generics.iter().map(|g| g.to_tokens(calling_namespace));
-            quote! { #namespace#name::<#(#generics),*> }
-        };
-        let mut cache = self.tokens.borrow_mut();
-        cache.insert(calling_namespace.to_owned(), result);
-        drop(cache);
-        self.to_tokens(calling_namespace)
+    pub fn to_tokens(&self) -> &TokenStream {
+        &self.tokens
     }
 
-    pub fn to_abi_tokens(&self, calling_namespace: &str) -> TokenStream {
-        let namespace = to_namespace_tokens(&self.namespace, calling_namespace);
+    pub fn to_abi_tokens(&self) -> TokenStream {
+        let namespace = to_namespace_tokens(&self.namespace, &self.calling_namespace);
 
         if self.generics.is_empty() {
             let name = format_abi_ident(&self.name);
             quote! { #namespace#name }
         } else {
             let name = format_abi_ident(&self.name[..self.name.len() - 2]);
-            let generics = self.generics.iter().map(|g| g.to_tokens(calling_namespace));
+            let generics = self.generics.iter().map(|g| g.to_tokens());
             quote! { #namespace#name::<#(#generics),*> }
         }
     }
@@ -348,24 +349,24 @@ impl TypeName {
     // Note: ideally to_definition_tokens and to_abi_definiton_tokens would not be required
     // and we would simply use to_tokens and to_abi_tokens everywhere but Rust is really
     // weird in requiring `IVector<T>` in some places and `IVector::<T>` in others.
-    pub fn to_definition_tokens(&self, calling_namespace: &str) -> TokenStream {
+    pub fn to_definition_tokens(&self) -> TokenStream {
         if self.generics.is_empty() {
             let name = format_ident(&self.name);
             quote! { #name }
         } else {
             let name = format_ident(&self.name[..self.name.len() - 2]);
-            let generics = self.generics.iter().map(|g| g.to_tokens(calling_namespace));
+            let generics = self.generics.iter().map(|g| g.to_tokens());
             quote! { #name<#(#generics),*> }
         }
     }
 
-    pub fn to_abi_definition_tokens(&self, calling_namespace: &str) -> TokenStream {
+    pub fn to_abi_definition_tokens(&self) -> TokenStream {
         if self.generics.is_empty() {
             let name = format_abi_ident(&self.name);
             quote! { #name }
         } else {
             let name = format_abi_ident(&self.name[..self.name.len() - 2]);
-            let generics = self.generics.iter().map(|g| g.to_tokens(calling_namespace));
+            let generics = self.generics.iter().map(|g| g.to_tokens());
             quote! { #name<#(#generics),*> }
         }
     }
@@ -377,26 +378,15 @@ impl TypeName {
 
         let phantoms = self.generics.iter().enumerate().map(|(count, generic)| {
             let name = format_ident!("__{}", count);
-            let generic = generic.to_tokens("");
+            let generic = generic.to_tokens();
             quote! { #name: ::std::marker::PhantomData::<#generic>, }
         });
 
         TokenStream::from_iter(phantoms)
     }
 
-    pub fn constraints<'a>(&'a self) -> Ref<'a, TokenStream> {
-        let cache = self.constraints.borrow();
-        if let Some(_) = &*cache {
-            return Ref::map(cache, |t| t.as_ref().unwrap());
-        }
-        drop(cache);
-        let generics = self.generics.iter().map(|generic| {
-            let generic = generic.to_tokens("");
-            quote! { #generic: ::winrt::RuntimeType + 'static, }
-        });
-
-        *self.constraints.borrow_mut() = Some(TokenStream::from_iter(generics));
-        self.constraints()
+    pub fn constraints(&self) -> &TokenStream {
+        &self.constraints
     }
 }
 
@@ -421,6 +411,7 @@ mod tests {
                 table_index: TableIndex::InterfaceImpl,
                 file_index: 0,
             }),
+            String::from("MyType"),
         );
 
         assert_eq!(type_name.runtime_name(), String::from("Outer.Inner.MyType"));
